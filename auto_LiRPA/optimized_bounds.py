@@ -398,6 +398,40 @@ def _get_optimized_bounds(
                             node.input_rho = input_node.output_rho
                             node.output_rho = input_node.output_rho
                             break
+        # for node in self.nodes():
+        #     print("node name : ", node, " rho (input, output): ", node.input_rho, node.output_rho)
+    # from auto_LiRPA.operators import BoundLinear, BoundConv, BoundAdd, BoundSub, BoundInput
+
+    # if lam:
+    #     for node in self.nodes():
+    #         if isinstance(node, BoundInput):
+    #             continue
+                
+    #         if node.perturbed and hasattr(node, 'output_rho'):
+    #             # 1. Linear and Conv (Existing logic)
+    #             if hasattr(node, 'interval_propagate') and isinstance(node, (BoundLinear, BoundConv)):
+    #                 inp = [n_pre.interval for n_pre in node.inputs if hasattr(n_pre, 'interval')]
+    #                 node.interval = node.interval_propagate(*inp)
+                
+    #             # 2. NEW: Handle Add and Sub specifically for L2 Norm
+    #             elif isinstance(node, (BoundAdd, BoundSub)):
+    #                 # We assume the inputs are orthogonal components (like in GroupSort).
+    #                 # The Lipschitz constant for x+y or x-y is sqrt(2).
+    #                 # We take the rho from the first perturbed input we find.
+    #                 for input_node in node.inputs:
+    #                     if hasattr(input_node, 'output_rho') and input_node.output_rho is not None:
+    #                         # SCALE BY SQRT(2) HERE
+    #                         node.input_rho = input_node.output_rho
+    #                         node.output_rho = input_node.output_rho * 1.41421356 
+    #                         break
+
+    #             # 3. Fallback: Assume 1-Lipschitz for everything else (Existing logic)
+    #             else:
+    #                 for input_node in node.inputs:
+    #                     if hasattr(input_node, 'output_rho') and input_node.output_rho is not None:
+    #                         node.input_rho = input_node.output_rho
+    #                         node.output_rho = input_node.output_rho
+    #                         break
 
     optimizable_activations = self.get_enabled_opt_act()
 

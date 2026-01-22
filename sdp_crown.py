@@ -2,6 +2,7 @@ import os
 import torch
 import time
 import argparse
+import gc
 
 from models import *
 from sdp_utils import *
@@ -12,77 +13,6 @@ import auto_LiRPA
 from auto_LiRPA import BoundedModule, BoundedTensor
 from auto_LiRPA.perturbations import PerturbationLpNorm
 print(auto_LiRPA.__file__)
-    
-
-# def verified_sdp_crown(dataset, labels, model, radius, clean_output, device, classes, args):
-#     samples = dataset.shape[0]
-#     verification_fail = samples - len(clean_output)
-#     verification_fail_idx = []
-#     total_time = 0
-#     log_dir = f'./logs/sdp_crown/{args.model.lower()}/{args.radius}'
-#     os.makedirs(log_dir, exist_ok=True)
-
-#     for idx, (image, label) in enumerate(zip(dataset, labels)):
-#         if idx not in clean_output:
-#             continue
-#         sample_idx = args.start + idx
-#         verifiction_status = "Success"
-#         image = image.unsqueeze(0).to(device)
-#         label = label.unsqueeze(0).to(device)
-#         norm = 2.0
-#         method = 'CROWN-Optimized'
-#         C = build_C(label, classes)
-#         x_L, x_U = None, None
-#         if "mnist" in args.model.lower():
-#             x_U = torch.ones_like(image)
-#             x_L = torch.zeros_like(image)
-          
-#         ptb = PerturbationLpNorm(norm=norm, eps=radius, x_U=x_U, x_L=x_L)
-#         image = BoundedTensor(image, ptb)
-#         lirpa_model = BoundedModule(model, image, device=image.device, verbose=0)
-#         #CHANGED
-#         lirpa_model.init_alpha(x=(image,))
-#         lirpa_model.set_bound_opts({'optimize_bound_args': {'iteration': 300, 'lr_alpha': args.lr_alpha, 'early_stop_patience': 20, 'fix_interm_bounds': False, 'enable_opt_interm_bounds':True, 'enable_SDP_crown': True, 'lr_lambda': args.lr_lambda}})
-
-#         # Run SDP-CROWN
-#         start_time = time.time()
-#         crown_lb, _ = lirpa_model.compute_bounds(x=(image,), method=method.split()[0], C=C, bound_lower=True, bound_upper=False)
-#         end_time = time.time()
-
-#         with torch.no_grad():
-#             if torch.any(crown_lb < 0):
-#                 verification_fail += 1
-#                 verifiction_status = "Fail"
-#                 verification_fail_idx.append(sample_idx)
-            
-#             elapsed_time = end_time - start_time
-#             total_time += elapsed_time
-#             sample_log = {
-#                 'sample_idx': sample_idx,
-#                 'true_label': label.item() if isinstance(label, torch.Tensor) else label,
-#                 'margins': crown_lb.cpu().tolist()[0],     
-#                 'verifiction_status': verifiction_status,
-#                 'elapsed_time': elapsed_time,
-#             }
-#             with open(f'{log_dir}/sample_{sample_idx}.log', "w", encoding='utf-8') as f:
-#                 for key, val in sample_log.items():
-#                     f.write(f"{key}: {val}\n") 
-#             print(f'Sample {sample_idx}, verifiction_status: {verifiction_status}, elapsed_time: {elapsed_time}s')
-    
-#     verified_accuracy = (samples-verification_fail)/samples*100
-#     average_time =  total_time/len(clean_output)
-#     final_log = {
-#         'verification_fail_idx': verification_fail_idx,
-#         'verification_fail': verification_fail,
-#         'verified_accuracy': verified_accuracy,
-#         'average_time': average_time,
-#     }
-#     with open(f'{log_dir}/final_results.log', "w", encoding='utf-8') as f:
-#         for key, val in final_log.items():
-#             f.write(f"{key}: {val}\n")         
-#     print(f'Total Verification Fail: {verification_fail}, verified_accuracy: {(samples-verification_fail)/samples*100}%, average_time: {average_time}s')
-#     return verified_accuracy, average_time
-
 
 
 def verified_sdp_crown(dataset, labels, model, radius, clean_output, device, classes, args, batch_size=2, return_robust_points=False, x_U=None, x_L=None):
@@ -113,7 +43,13 @@ def verified_sdp_crown(dataset, labels, model, radius, clean_output, device, cla
     verification_fail_idx = [] 
     robust_indices_list = []
 
+
     for i in range(num_batches):
+        # MONITOR: Print memory before building the new model
+        print(f"--- Batch {i+1} Start ---")
+        print(f"Allocated: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
+        print(f"Reserved:  {torch.cuda.memory_reserved() / 1024**2:.2f} MB")
+
         start_idx = i * batch_size
         end_idx = min((i + 1) * batch_size, num_correct_samples)
         
@@ -172,15 +108,26 @@ def verified_sdp_crown(dataset, labels, model, radius, clean_output, device, cla
             'fix_interm_bounds': False, 
             'enable_opt_interm_bounds': True, 
             'enable_SDP_crown': True, 
-            'lr_lambda': args.lr_lambda
+            'lr_lambda': args.lr_lambda,
+            # 'lr_decay': 0.999,
         }})
+        # lirpa_model.set_bound_opts({'optimize_bound_args': {
+        #     'iteration': 500, 
+        #     'lr_alpha': 0.5, 
+        #     'early_stop_patience': 50, 
+        #     'fix_interm_bounds': False, 
+        #     'enable_opt_interm_bounds': True, 
+        #     'enable_SDP_crown': True, 
+        #     'lr_lambda': 0.05,
+        #     'lr_decay': 0.98,
+        # }})
 
         # --- 6. Execution ---
         if device.type == 'cuda': torch.cuda.synchronize()
         start_time = time.time()
         
         crown_lb, _ = lirpa_model.compute_bounds(x=(image_batch,), method='CROWN-Optimized', C=C, bound_lower=True, bound_upper=False)
-
+        # print(crown_lb)
         if device.type == 'cuda': torch.cuda.synchronize()
         end_time = time.time()
         
@@ -200,6 +147,21 @@ def verified_sdp_crown(dataset, labels, model, radius, clean_output, device, cla
              robust_indices_list.append(original_indices[is_robust_batch])
              
         print(f"Batch {i+1}/{num_batches}: {is_robust_batch.sum().item()}/{current_batch_size} verified. Time: {batch_time:.2f}s")
+        
+        # Memory Cleanup 
+        del lirpa_model
+        del image_batch
+        del ptb
+        del C
+        del crown_lb  # If this tensor is attached to the graph, it keeps the graph alive!
+            
+        # Force Python's Garbage Collector to destroy the objects
+        gc.collect()
+            
+        # Force PyTorch to release the freed memory back to the GPU
+        torch.cuda.empty_cache()
+            
+        print(f"Batch {i+1} Cleaned. Memory: {torch.cuda.memory_allocated()/1024**2:.2f} MB")
 
     # --- 8. Final Metrics ---
     verification_fail_count = (samples - num_correct_samples) + (num_correct_samples - num_robust_points)

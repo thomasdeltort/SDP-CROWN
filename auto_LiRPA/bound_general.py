@@ -1141,7 +1141,7 @@ class BoundedModule(nn.Module):
             intermediate_constr=None, alpha_idx=None,
             aux_reference_bounds=None, need_A_only=False,
             cutter=None, decision_thresh=None,
-            update_mask=None, ibp_nodes=None, cache_bounds=False):
+            update_mask=None, ibp_nodes=None, cache_bounds=False, groupsort=False):
         r"""Main function for computing bounds.
 
         Args:
@@ -1247,7 +1247,8 @@ class BoundedModule(nn.Module):
             cache_bounds: If `True`, the currently set lower and upper bounds will not
             be deleted, but cached for use by the INVPROP algorithm. This should not be
             set by the user, but only in `_get_optimized_bounds`.
-
+            
+            groupsort : Bool, does the network includes groupsort2 activations
         Returns:
             bound (tuple): When `return_A` is `False`, return a tuple of
             the computed lower bound and upper bound. When `return_A`
@@ -1342,6 +1343,12 @@ class BoundedModule(nn.Module):
 
         if forward:
             self.init_forward(roots, dim_in)
+
+        # Initialize the self.groupsort 
+        if groupsort:
+            for n in self.nodes():
+                if isinstance(n, BoundRelu) and hasattr(n, 'groupsort'):
+                    n.set_groupsort()
 
         for n in self.nodes():
             if isinstance(n, BoundRelu):

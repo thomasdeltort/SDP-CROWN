@@ -334,11 +334,20 @@ class BoundTwoPieceLinear(BoundOptimizableActivation):
         else:
             raise ValueError
         return full_alpha
+    
+    def set_groupsort(self):
+        """
+        Updates the options dictionary to signal this is a GroupSort ReLU.
+        """
+        # We set the flag inside the dictionary
+        self.groupsort = True
 
     def sdp_crown_bias(self, w, g, lam, start_node, output_shape, sign=+1):
         # Calculate bias using SDP-CROWN within L2 norm of radius rho center at xc
         xc = self.xc
         rho = self.input_rho
+        if self.groupsort:
+            rho = rho * math.sqrt(2)
 
         if isinstance(w, Patches):
             # This layer is BoundConv
@@ -524,7 +533,12 @@ class BoundRelu(BoundTwoPieceLinear):
             attr = {}
         self.leaky_alpha = attr.get('alpha', 0)
         self.alpha_size = 2
+        self.groupsort = False
         # Alpha dimension is (2, output_shape, batch, *shape) for ReLU.
+
+    def set_groupsort(self):
+    # Sets the attribute groupsort to true if the relu is inside a groupsort (in this case we have to rescale rho in sdp crown bias by sqrt(2))
+        self.groupsort = True
 
     def get_unstable_idx(self):
         self.alpha_indices = torch.logical_and(

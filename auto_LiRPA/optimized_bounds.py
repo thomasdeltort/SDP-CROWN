@@ -398,6 +398,7 @@ def _get_optimized_bounds(
                             node.input_rho = input_node.output_rho
                             node.output_rho = input_node.output_rho
                             break
+    # import pdb;pdb.set_trace()
         # for node in self.nodes():
         #     print("node name : ", node, " rho (input, output): ", node.input_rho, node.output_rho)
     # from auto_LiRPA.operators import BoundLinear, BoundConv, BoundAdd, BoundSub, BoundInput

@@ -15,7 +15,7 @@ from auto_LiRPA.perturbations import PerturbationLpNorm
 print(auto_LiRPA.__file__)
 
 
-def verified_sdp_crown(dataset, labels, model, radius, clean_output, device, classes, args, batch_size=1, return_robust_points=False, x_U=None, x_L=None, groupsort=False):
+def verified_sdp_crown(dataset, labels, model, radius, clean_output, device, classes, args, batch_size=1, return_robust_points=False, x_U=None, x_L=None, groupsort=False, remove_sparse_ibp=False):
     """
     Args:
         x_U (torch.Tensor, optional): Global upper bound for inputs (e.g., all 1s). 
@@ -23,10 +23,30 @@ def verified_sdp_crown(dataset, labels, model, radius, clean_output, device, cla
         x_L (torch.Tensor, optional): Global lower bound for inputs (e.g., all 0s).
     """
     model.eval()
+    
+    # --- NEW: Architecture Check for conv_mode ---
+    # Check if the model contains any residual blocks
+    has_residuals = any(isinstance(m, (BasicBlockLipschitz, BottleneckBlockLipschitz)) 
+                        for m in model.modules())
+    
+    # Determine the safest and most efficient conv_mode
+    selected_conv_mode = "matrix" if has_residuals else "patches"
+    
+    print(f"Structure check: {'Residuals detected' if has_residuals else 'Sequential architecture'}.")
+    print(f"Using auto_LiRPA conv_mode: {selected_conv_mode}")
+
     # --- 1. Filter for correctly classified samples ---
     correct_images = dataset[clean_output].to(device)
     correct_labels = labels[clean_output].to(device)
-
+    
+    # --- NEW: Reverse the order of the points ---
+    # We use torch.flip to reverse the tensors along the batch dimension (dim 0)
+    correct_images = torch.flip(correct_images, dims=[0]).to(device)
+    correct_labels = torch.flip(correct_labels, dims=[0]).to(device)
+    
+    # THE FIX: Flip the indices to maintain the 1:1 mapping!
+    clean_output = torch.flip(clean_output, dims=[0])
+    
     num_correct_samples = len(correct_images)
     samples = dataset.shape[0] 
     
@@ -42,7 +62,6 @@ def verified_sdp_crown(dataset, labels, model, radius, clean_output, device, cla
     num_robust_points = 0
     verification_fail_idx = [] 
     robust_indices_list = []
-
 
     for i in range(num_batches):
         # MONITOR: Print memory before building the new model
@@ -94,15 +113,14 @@ def verified_sdp_crown(dataset, labels, model, radius, clean_output, device, cla
         image_batch = BoundedTensor(batch_images, ptb)
         
         # Create the model for THIS batch specifically
-        # We must rebuild this to clear previous geometric constraints
-        lirpa_model = BoundedModule(model, image_batch, device=device, verbose=0)
+        # UPDATED: Passing the selected_conv_mode here in bound_opts
+        lirpa_model = BoundedModule(model, image_batch, device=device, bound_opts={"conv_mode": selected_conv_mode}, verbose=0)
         
         C = build_C(batch_labels, classes)
 
         # --- 5. Initialize SDP Optimization ---
-        
-      
         if args.high_tau :
+          if remove_sparse_ibp:
             lirpa_model.set_bound_opts({
             'optimize_bound_args': {
                 'iteration': 1000,
@@ -111,22 +129,43 @@ def verified_sdp_crown(dataset, labels, model, radius, clean_output, device, cla
                 'lr_decay': 0.998,
                 'early_stop_patience': 100,
                 'fix_interm_bounds': False,         # Change to True to stabilize the final output
-                'enable_opt_interm_bounds': True, # Use pre-computed bounds for speed
-                'enable_SDP_crown': True,               # Ensure Adam is used for dual variables
+                'enable_opt_interm_bounds': True,   # Use pre-computed bounds for speed
+                'enable_SDP_crown': True,           # Ensure Adam is used for dual variables
                 }
-            })
+            , 'sparse_intermediate_bounds': False})
+          else:
+            lirpa_model.set_bound_opts({
+            'optimize_bound_args': {
+                'iteration': 1000,
+                'lr_alpha': 0.5, 
+                'lr_lambda': 0.5,
+                'lr_decay': 0.998,
+                'early_stop_patience': 100,
+                'fix_interm_bounds': False,         # Change to True to stabilize the final output
+                'enable_opt_interm_bounds': True,   # Use pre-computed bounds for speed
+                'enable_SDP_crown': True,           # Ensure Adam is used for dual variables
+                }})
         else:
+          if remove_sparse_ibp:
             lirpa_model.set_bound_opts({'optimize_bound_args': {
-            'iteration': 300, 
-            'lr_alpha': args.lr_alpha, 
-            'early_stop_patience': 20, 
-            'fix_interm_bounds': False, 
-            'enable_opt_interm_bounds': True, 
-            'enable_SDP_crown': True, 
-            'lr_lambda': args.lr_lambda,
-        }})
-
-        
+              'iteration': 300, 
+              'lr_alpha': args.lr_alpha, 
+              'early_stop_patience': 20, 
+              'fix_interm_bounds': False, 
+              'enable_opt_interm_bounds': True, 
+              'enable_SDP_crown': True, 
+              'lr_lambda': args.lr_lambda,
+          }, 'sparse_intermediate_bounds': False})
+          else:
+            lirpa_model.set_bound_opts({'optimize_bound_args': {
+              'iteration': 300, 
+              'lr_alpha': args.lr_alpha, 
+              'early_stop_patience': 20, 
+              'fix_interm_bounds': False, 
+              'enable_opt_interm_bounds': True, 
+              'enable_SDP_crown': True, 
+              'lr_lambda': args.lr_lambda,
+          }})
 
         # --- 6. Execution ---
         if device.type == 'cuda': torch.cuda.synchronize()
@@ -148,7 +187,7 @@ def verified_sdp_crown(dataset, labels, model, radius, clean_output, device, cla
         num_robust_points += is_robust_batch.sum().item()
         
         if return_robust_points:
-             robust_indices_list.append(original_indices[is_robust_batch])
+             robust_indices_list.append(original_indices[is_robust_batch.cpu()])
              
         print(f"Batch {i+1}/{num_batches}: {is_robust_batch.sum().item()}/{current_batch_size} verified. Time: {batch_time:.2f}s")
         
@@ -181,8 +220,6 @@ def verified_sdp_crown(dataset, labels, model, radius, clean_output, device, cla
         return verified_accuracy, average_time, all_robust_indices
         
     return verified_accuracy, average_time
-
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

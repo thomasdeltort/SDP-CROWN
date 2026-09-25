@@ -62,8 +62,11 @@ class BoundMinMax(BoundOptimizableActivation):
                 alpha_u_ub += case3
                 alpha_l_ub += case3
 
-                alpha_u_lb = torch.clamp(alpha_u_lb, min=eps)
-                alpha_u_ub = torch.clamp(alpha_u_ub, min=eps)
+#                alpha_u_lb = torch.clamp(alpha_u_lb, min=eps)
+                alpha_u_lb = torch.clamp(alpha_u_lb, min=eps.to(alpha_u_lb.device) if isinstance(eps, torch.Tensor) else eps)
+#                alpha_u_ub = torch.clamp(alpha_u_ub, min=eps)
+                alpha_u_ub = torch.clamp(alpha_u_ub, min=eps.to(alpha_u_ub.device) if isinstance(eps, torch.Tensor) else eps)
+                
             elif self.op == 'min':
                 # Case 1: l_y >= u_x
                 case1 = (lb_y >= ub_x).requires_grad_(False).to(lb_x.dtype)
@@ -131,7 +134,7 @@ class BoundMinMax(BoundOptimizableActivation):
         self._cached_lb_y = lb_y.detach()
         self._cached_ub_y = ub_y.detach()
 
-        epsilon = 1e-6
+        epsilon = 1e-4
         ub_x = torch.max(ub_x, lb_x + epsilon)
         ub_y = torch.max(ub_y, lb_y + epsilon)
         # Ideally, if x or y are constant, this layer should be replaced by a ReLU
